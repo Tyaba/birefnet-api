@@ -1,0 +1,77 @@
+[env]
+SHORT_SHA = "{{exec(command='git rev-parse --short HEAD')}}"
+PWD = "{{exec(command='pwd')}}"
+
+[tasks.sync]
+run = """
+uv add -r requirements.txt
+uv pip install -e ".[dev]"
+"""
+[tasks.download-models]
+run = """
+mkdir -p data/pretrained
+gcloud storage cp -r "$GCP_BIREFNET_PATH" data/pretrained/
+"""
+
+[tasks.short-sha]
+run = "echo $SHORT_SHA"
+
+[tasks.run]
+run = """
+docker run \
+--gpus all \
+-p 8080:8080 \
+$REGION-docker.pkg.dev/$GOOGLE_CLOUD_PROJECT/containers/$SERVICE_NAME
+"""
+
+[tasks.run_local]
+run = "gunicorn -c src/gunicorn.conf.py"
+
+[tasks.pull-upstream]
+run = """
+git remote add upstream
+git fetch upstream
+git checkout main
+git merge upstream/main
+"""
+
+[tasks.lint]
+run = "ruff check . --fix"
+[tasks.format]
+run = "ruff format ."
+[tasks.vet]
+depends = ["lint", "format"]
+
+[tasks.test]
+run = "python -m pytest tests"
+
+[tasks.download-stubs]
+run = "mypy --install-types --non-interactive"
+
+[tasks.cloudbuild]
+run = """
+gcloud builds submit \
+--project $GOOGLE_CLOUD_PROJECT \
+--config cloudbuild.yaml \
+--substitutions=\
+_REGION=$REGION,\
+_SERVICE_NAME=$SERVICE_NAME,\
+SHORT_SHA=$SHORT_SHA
+"""
+
+[tasks.deploy-cloudrun]
+run = """
+gcloud beta run deploy ${SERVICE_NAME} \
+--image=$REGION-docker.pkg.dev/$GOOGLE_CLOUD_PROJECT/containers/$SERVICE_NAME:${SHORT_SHA} \
+--no-allow-unauthenticated \
+--port=${PORT} \
+--concurrency=1 \
+--timeout=3600 \
+--cpu=8 \
+--memory=32Gi \
+--gpu=1 \
+--max-instances=7 \
+--no-cpu-throttling \
+--region=${CLOUD_RUN_REGION} \
+--project=${GOOGLE_CLOUD_PROJECT}
+"""
